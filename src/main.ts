@@ -29,8 +29,8 @@ async function bootstrap() {
 
   const port = 9999; // A porta em que o servidor WebSocket vai ouvir
   await app.listen(port, '0.0.0.0');
-
-  console.log(`Servidor Nest.js está ouvindo na porta ${port}`);
+  const address = await app.getUrl();
+  console.log(`Servidor Nest.js está ouvindo na porta ${port} em ${address}`);
 }
 
 bootstrap();

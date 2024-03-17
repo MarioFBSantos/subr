@@ -1,69 +1,65 @@
-import { WebSocketGateway, WebSocketServer, SubscribeMessage, OnGatewayConnection, OnGatewayDisconnect } from '@nestjs/websockets';
+import { WebSocketGateway, WebSocketServer, OnGatewayConnection, OnGatewayDisconnect, SubscribeMessage } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
-import { SpeechClient } from '@google-cloud/speech';
-
+import { Injectable } from '@nestjs/common';
+import fs from 'fs';
 @WebSocketGateway({
 	cors: {
 		origin: '*',
 		allowedHeaders: ['Content-Type'],
 	},
 })
+@Injectable()
 export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnect {
 	@WebSocketServer() server: Server;
-	private audioStreamClients: Map<string, Socket> = new Map();
-
-	private speechClient: SpeechClient;
-
-	constructor() {
-		this.speechClient = new SpeechClient();
-	}
+	private connectedClients: Map<string, Socket> = new Map();
+	private receivedWords: string[] = [];
 
 	handleConnection(client: Socket) {
 		console.log(`Client connected: ${client.id}`);
-		// Adicione o cliente à lista de clientes de streaming
-		this.audioStreamClients.set(client.id, client);
+		// this.connectedClients.set(client.id, client);
+		client.join('room1');
 	}
 
 	handleDisconnect(client: Socket) {
 		console.log(`Client disconnected: ${client.id}`);
-		// Remova o cliente da lista de clientes de streaming
-		this.audioStreamClients.delete(client.id);
+		this.connectedClients.delete(client.id);
 	}
 
-	@SubscribeMessage('audioStream')
-	async handleAudioStream(client: Socket, audioData: Buffer) { // Usar Buffer em vez de Blob
-		// Enviar o áudio para outros clientes de streaming (se necessário)
-		for (const [, targetClient] of this.audioStreamClients) {
-			if (targetClient.id !== client.id) {
-				targetClient.emit('audioStream', audioData); // Usar audioData em vez de audioBlob
-			}
+	@SubscribeMessage('sendWords')
+	handleReceivedWords(client: Socket, wordsString: string) {
+		console.log(wordsString);
+		this.server.to('room1').emit('wordsReceived', wordsString);
+		console.log(`Emitted wordsReceived with data: ${wordsString}`);
+
+		fs.appendFile('words.txt', wordsString, function (err) {
+			if (err) throw err;
+		});
+	}
+
+	@SubscribeMessage('wordsReceived')
+	handleWordsReceived(client: Socket, wordsString: string) {
+		this.server.to('room1').emit('wordsReceived', wordsString);
+	}
+
+	@SubscribeMessage('checkRoom')
+	handleCheckRoom(client: Socket, room: string) {
+		const isClientInRoom = this.server.sockets.adapter.rooms.get(room)?.has(client.id);
+		client.emit('checkRoomResponse', isClientInRoom);
+	}
+
+	@SubscribeMessage('joinRoom')
+	handleJoinRoom(client: Socket, room: string) {
+		// verify if room exists and verify if the client is already in the room
+		const doesRoomExist = this.server.sockets.adapter.rooms.has(room);
+		const isClientInRoom = doesRoomExist ? this.server.sockets.adapter.rooms.get(room).has(client.id) : false;
+		client.emit('roomVerificationResponse', { room: room, exists: doesRoomExist, isClientInRoom: isClientInRoom });
+		console.log('Joining room O QUE RECEBI: ' + room);
+		if (doesRoomExist && !isClientInRoom) {
+			client.join(room);
+			console.log(`Client ${client.id} joined room ${room}`);
 		}
-
-		// Transcrição do áudio
-		try {
-			const [response] = await this.speechClient.recognize({
-				audio: {
-					content: audioData, // Usar audioData diretamente
-				},
-				config: {
-					encoding: 'LINEAR16',
-					sampleRateHertz: 16000,
-					languageCode: 'en-US',
-				},
-			});
-
-			const transcription = response.results
-				.map((result) => result.alternatives[0].transcript)
-				.join('\n');
-
-			// Envie a transcrição para o cliente que enviou o áudio
-			client.emit('transcription', transcription);
-		} catch (error) {
-			// Trate o erro do WebSocket aqui
-			console.error('WebSocket error:', error);
-
-			// Se desejar, você pode emitir um evento de erro para o cliente
-			// client.emit('websocketError', 'Ocorreu um erro na conexão WebSocket');
+		else {
+			console.log('Room does not exist or client is already in room', doesRoomExist, isClientInRoom);
 		}
 	}
 }
